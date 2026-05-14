@@ -1,3 +1,7 @@
+from functools import lru_cache
+from pathlib import Path
+import subprocess
+import sys
 
 import joblib
 import numpy as np
@@ -31,6 +35,39 @@ import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+ROOT = Path(__file__).resolve().parent
+MODEL_PATH = ROOT / "Models" / "XGBoostTunedModel.pkl"
+
+
+def _train_model_subprocess() -> None:
+    result = subprocess.run(
+        [sys.executable, str(ROOT / "train_save_model.py")],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        msg = (result.stderr or result.stdout or "").strip() or "unknown error"
+        raise RuntimeError(f"train_save_model.py failed (exit {result.returncode}): {msg}")
+
+
+@lru_cache(maxsize=1)
+def load_xgb_model():
+    MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    if not MODEL_PATH.is_file():
+        try:
+            from train_save_model import main as _train_and_save_model
+
+            _train_and_save_model()
+        except Exception:
+            _train_model_subprocess()
+    if not MODEL_PATH.is_file():
+        raise FileNotFoundError(
+            f"Model file missing after training: {MODEL_PATH}. "
+            "Run: python train_save_model.py from the Stroke_Prediction2 folder."
+        )
+    return joblib.load(MODEL_PATH)
+
 
 st.markdown(
         f"""
@@ -40,15 +77,6 @@ st.markdown(
             }}
             #MainMenu {{visibility: hidden;}}
             footer {{visibility: hidden;}}
-            footer:after {{
-                content:' Made with ♥ by AIML Team 11 of Virtusa Codelite Hackathon 2021'; 
-                visibility: visible;
-                display: flex;
-                justify-content: center;
-                color: white;
-                background-color: #f63366;
-                padding: -5px;
-            }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -57,10 +85,6 @@ st.markdown(
 def main():
     st.title("STROKE PREDICTION AND ANALYSIS USING MACHINE LEARNING")
 
-    st.header("AIML TEAM 11")
-
-    st.subheader("Virtusa Codelite Hackathon 2021")
-
     menu = ["Prediction","Model Details"]
     activity = st.selectbox("Select a Menu",menu)
 
@@ -68,7 +92,7 @@ def main():
 
         st.subheader("Cleaned Dataset")
         #loading dataframe
-        df = pd.read_csv("train.csv")
+        df = pd.read_csv(ROOT / "train.csv")
 
         #Filling Missing values of bmi using mean
         df['bmi'] = df['bmi'].fillna(df.groupby('age')['bmi'].transform('mean'))
@@ -384,12 +408,18 @@ def main():
 
         smoking_status = st.radio("User's Smoking Status?",("Unknown","Formerly Smoked","Never Smoked","Smokes"))
         
-        #model (XGBoost)
-        prediction_model = 'XGBoost'
-        trained_model = joblib.load('Models/XGBoostTunedModel.pkl')
+        prediction_model = "XGBoost"
         model_accuracy = "94.9%"
 
         if st.button("Submit"):
+            try:
+                trained_model = load_xgb_model()
+            except Exception as exc:
+                st.error(
+                    "Could not load or train the prediction model. "
+                    f"From a terminal run: cd {ROOT} then python train_save_model.py — Details: {exc}"
+                )
+                st.stop()
             #Encoding categorical attributes to values
             gender = 1 if gender == 'Male' else 0
             age = float(age)
